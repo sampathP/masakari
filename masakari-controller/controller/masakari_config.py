@@ -24,10 +24,13 @@ import syslog
 import paramiko
 import sys
 import os
-import logging
 import socket
+import threading
+import errno
+from oslo_config import cfg
+from oslo_log import log as logging
 
-
+LOG = logging.getLogger(__name__)
 class RecoveryControllerConfig(object):
 
     """
@@ -48,7 +51,6 @@ class RecoveryControllerConfig(object):
         self._get_option(config_path)
 
     def _get_option(self, config_file_path):
-
         inifile = ConfigParser.SafeConfigParser()
         inifile.read(config_file_path)
 
@@ -56,23 +58,25 @@ class RecoveryControllerConfig(object):
         self.conf_ssh = {}
         self.conf_db = {}
         self.conf_log = {}
-        self.syslog_lv = {'debug': syslog.LOG_DEBUG,
-                          'info': syslog.LOG_INFO,
-                          'notice': syslog.LOG_NOTICE,
-                          'warning': syslog.LOG_WARNING,
-                          'err': syslog.LOG_ERR}
+        self.syslog_lv = {'debug': 'DEBUG',
+                          'info': 'INFO',
+                          'warning': 'WARNING',
+                          'error': 'ERROR',
+                          'critical': 'CRITICAL'}
         self.config_recover_starter = {}
         self.config_nova = {}
+
+        # insert conf_log dictionary
+        log_lv = inifile.get('log', 'log_level')
+        self.conf_log['log_level'] = self.syslog_lv[log_lv]
+        self.conf_log['log_file'] = inifile.get('log', 'log_file')
+        self._log_setup()
 
         # insert conf_wsgi dictionary
         self.conf_wsgi = self._set_wsgi_section(inifile)
 
         # insert conf_db dictionary
         self.conf_db = self._set_db_section(inifile)
-
-        # insert conf_log dictionary
-        log_lv = inifile.get('log', 'log_level')
-        self.conf_log['log_level'] = self.syslog_lv[log_lv]
 
         # insert conf_recover_starter dictionary
         self.conf_recover_starter = self._set_recover_starter_section(inifile)
@@ -168,3 +172,33 @@ class RecoveryControllerConfig(object):
         else:
             dicNull = {}
             return dicNull
+
+    def _log_setup(self):
+
+        CONF = cfg.CONF
+
+        level = self.conf_log.get('log_level')
+
+        logging.set_defaults(
+            default_log_levels=logging.get_default_log_levels() +
+            ['controller=' + level])
+
+        DOMAIN = "masakari"
+        CONF.log_file = self.conf_log.get("log_file")
+        CONF.use_stderr = False
+
+        logging.register_options(CONF)
+        logging.setup(CONF, DOMAIN)
+
+        log_dir = os.path.dirname(self.conf_log.get("log_file"))
+
+        # create log dir if not created
+        try:
+            os.makedirs(log_dir)
+        except OSError as exc:
+            if exc.errno == errno.EEXIST and os.path.isdir(log_dir):
+                pass
+            else:
+                raise
+
+        return
